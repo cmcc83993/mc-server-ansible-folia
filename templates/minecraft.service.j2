@@ -1,0 +1,14 @@
+[Unit]
+Description=Minecraft Server
+After=network.target
+
+[Service]
+User={{ minecraft_user }}
+Group={{ minecraft_group }}
+SuccessExitStatus=0 1
+WorkingDirectory={{ server_dir }}
+ExecStart=/usr/bin/java -Xmx{{ server_max_ram }} -Xms{{ server_min_ram }} -jar {{ server_dir }}/{{ folia_jar }} nogui
+ExecStop={{ mcrcon_dir }}/mcrcon -H 127.0.0.1 -P {{ rcon_port }} -p {{ rcon_password }} stop
+
+[Install]
+WantedBy=multi-user.target

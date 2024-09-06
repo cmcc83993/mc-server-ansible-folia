@@ -1,0 +1,160 @@
+---
+
+- name: Install OpenJDK 21 + Other dependencies
+  hosts: target_server
+  become: true
+  tasks:
+
+    - name: Uninstall other versions of JDK
+      ansible.builtin.apt:
+        name: "openjdk-*"
+        state: absent
+        purge: yes
+
+    - name: Install the latest openjdk 21 jdk
+      ansible.builtin.apt:
+        name: openjdk-21-jdk
+        update_cache: yes
+        state: latest
+
+    - name: Install required packages
+      ansible.builtin.apt:
+        name:
+          - gradle
+          - git
+        state: latest
+
+    - name: Check if reboot required
+      ansible.builtin.stat:
+        path: /var/run/reboot-required
+      register: reboot
+
+    - name: Reboot if required
+      reboot:
+      when: reboot.stat.exists == true
+
+- name: Build Folia and Setup Server
+  hosts: target_server
+  become: true
+  vars:
+    minecraft_user: 'minecraft'
+    minecraft_group: 'minecraft'
+    folia_path: /opt/folia
+    server_dir: /opt/mc-server
+    folia_jar: folia.jar
+    agree_to_eula: true
+    server_port: 25565
+    server_ip: ''
+    server_max_ram: '13g'
+    server_min_ram: '13g'
+    mcrcon_dir: /opt/mcrcon
+    rcon_enable: true # we need this to be true for server shutdown
+    rcon_port: 25575
+    rcon_password: 'veryverysecurepassword'
+    max_players: 20
+  tasks:
+
+    - name: Clone Folia from GitHub
+      ansible.builtin.git:
+        repo: 'https://github.com/PaperMC/Folia.git'
+        refspec: 'master'
+        dest: '{{ folia_path }}'
+        depth: 10
+        force: true
+
+    - name: Git Configure Name...
+      ansible.builtin.command:
+        cmd: 'git config --global user.name "Fake Name"'
+        chdir: '{{ folia_path }}'
+
+    - name: Git Configure Email...
+      ansible.builtin.command:
+        cmd: 'git config --global user.email "fake@email.com"'
+        chdir: '{{ folia_path }}'
+
+    - name: Build Folia - applyPatches
+      ansible.builtin.command:
+        cmd: './gradlew applyPatches'
+        chdir: '{{ folia_path }}'
+
+    - name: Build Folia - createMojmapBundlerJar
+      ansible.builtin.command:
+        cmd: './gradlew createMojmapBundlerJar'
+        chdir: '{{ folia_path }}'
+
+    - name: Create Server Directory
+      ansible.builtin.file:
+        path: '{{ server_dir }}'
+        state: directory
+        owner: '{{ minecraft_user }}'
+        group: '{{ minecraft_group }}'
+
+    - name: Copy Jar
+      ansible.builtin.shell: "cp {{ folia_path }}/build/libs/*.jar {{ server_dir }}/{{ folia_jar }}"
+
+    - name: Permission Jar
+      ansible.builtin.file:
+        path: '{{ server_dir }}/folia.jar'
+        owner: '{{ minecraft_user }}'
+        group: '{{ minecraft_group }}'
+        mode: '0555'
+
+    - name: Template out EULA
+      ansible.builtin.template:
+        src: eula.txt.j2
+        dest: '{{ server_dir }}/eula.txt'
+        owner: '{{ minecraft_user }}'
+        group: '{{ minecraft_group }}'
+        mode: '0444'
+
+    - name: Template out server.properties
+      ansible.builtin.template:
+        src: server.properties.j2
+        dest: '{{ server_dir }}/server.properties'
+        owner: '{{ minecraft_user }}'
+        group: '{{ minecraft_group }}'
+        mode: '0664'
+
+    - name: Download and install mcrcon
+      ansible.builtin.get_url:
+        url: https://github.com/Tiiffi/mcrcon/releases/download/v0.7.2/mcrcon-0.7.2-linux-x86-64.tar.gz
+        dest: /tmp/mcrcon.tar.gz
+        checksum: sha256:c1883c3f6610c751c935f4faefbf2c52f704a0f71013be2928972eef5918cb68
+
+    - name: Make mcrcon directory
+      ansible.builtin.file:
+        path: '{{ mcrcon_dir }}'
+        state: directory
+        mode: '0755'
+        owner: '{{ minecraft_user }}'
+        group: '{{ minecraft_group }}'
+
+    - name: Unpack mcrcon
+      ansible.builtin.unarchive:
+        src: /tmp/mcrcon.tar.gz
+        dest: '{{ mcrcon_dir }}'
+        remote_src: true
+
+    - name: Template out systemd service
+      ansible.builtin.template:
+        src: minecraft.service.j2
+        dest: /usr/lib/systemd/system/minecraft.service
+        owner: root
+        group: root
+        mode: '0644'
+
+    - name: Install Minecraft Service
+      ansible.builtin.systemd_service:
+        name: minecraft.service
+        daemon_reload: true
+        state: started
+        enabled: true
+
+    - name: Open server port on firewall
+      community.general.ufw:
+        rule: allow
+        proto: '{{ item }}'
+        port: '{{ server_port }}'
+      loop:
+        - tcp
+        - udp
