@@ -54,6 +54,20 @@
     max_players: 20
   tasks:
 
+    - name: Create mc server group
+      ansible.builtin.group:
+        name: "{{ minecraft_group }}"
+        state: present
+
+    - name: Create mc server user
+      ansible.builtin.user:
+        name: "{{ minecraft_user }}"
+        group: "{{ minecraft_group }}"
+        create_home: false
+        shell: /sbin/nologin
+        comment: "Minecraft server service account"
+
+
     - name: Clone Folia from GitHub
       ansible.builtin.git:
         repo: 'https://github.com/PaperMC/Folia.git'
